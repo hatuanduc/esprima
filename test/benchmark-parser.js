@@ -1,5 +1,5 @@
 /*
-  Copyright (c) jQuery Foundation, Inc. and Contributors, All Rights Reserved.
+  Copyright JS Foundation and other contributors, https://js.foundation/
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
@@ -66,20 +66,20 @@ function runParserTests(tests) {
             var syntax = esprima.parse(source, { range: true, loc: true });
             tree.push(syntax.body.length);
         }, {
-            'onComplete': function (event) {
-                var result;
-                if (typeof gc === 'function') {
-                    gc();
+                'onComplete': function (event) {
+                    var result;
+                    if (typeof gc === 'function') {
+                        gc();
+                    }
+                    result = pad(this.name, 20);
+                    result += pad(kb(size) + ' KiB', 12);
+                    result += pad((1000 * this.stats.mean).toFixed(2), 10);
+                    result += ' ms \xb1 ' + this.stats.rme.toFixed(2) + '%';
+                    log(result);
+                    totalTime += this.stats.mean;
+                    totalRme += this.stats.mean * this.stats.rme * this.stats.rme;
                 }
-                result = pad(this.name, 20);
-                result += pad(kb(size) + ' KiB', 12);
-                result += pad((1000 * this.stats.mean).toFixed(2), 10);
-                result += ' ms \xb1 ' + this.stats.rme.toFixed(2) + '%';
-                log(result);
-                totalTime += this.stats.mean;
-                totalRme += this.stats.mean * this.stats.rme * this.stats.rme;
-            }
-        });
+            });
     }, new Benchmark.Suite()).on('complete', function () {
         log('                     ------------------------');
         log(pad(kb(totalSize) + ' KiB', 32) +

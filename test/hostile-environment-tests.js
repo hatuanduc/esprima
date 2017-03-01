@@ -1,5 +1,5 @@
 /*
-  Copyright (c) jQuery Foundation, Inc. and Contributors, All Rights Reserved.
+  Copyright JS Foundation and other contributors, https://js.foundation/
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
@@ -40,7 +40,7 @@ Object.defineProperty = defineProperty;
 
 if (typeof Object.defineProperty === 'function') {
     Object.defineProperty(Object.prototype, '$a', {
-        get: function () {},
+        get: function () { },
         configurable: true
     });
     try {

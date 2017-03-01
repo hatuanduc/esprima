@@ -1,5 +1,5 @@
 /*
-  Copyright (c) jQuery Foundation, Inc. and Contributors, All Rights Reserved.
+  Copyright JS Foundation and other contributors, https://js.foundation/
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
@@ -23,13 +23,13 @@
 */
 
 import { CommentHandler } from './comment-handler';
-import { Parser } from './parser';
 import { JSXParser } from './jsx-parser';
+import { Parser } from './parser';
 import { Tokenizer } from './tokenizer';
 
-export function parse(code, options, delegate) {
-    let commentHandler: CommentHandler = null;
-    const proxyDelegate = function(node, metadata) {
+export function parse(code: string, options, delegate) {
+    let commentHandler: CommentHandler | null = null;
+    const proxyDelegate = (node, metadata) => {
         if (delegate) {
             delegate(node, metadata);
         }
@@ -39,8 +39,9 @@ export function parse(code, options, delegate) {
     };
 
     let parserDelegate = (typeof delegate === 'function') ? proxyDelegate : null;
+    let collectComment = false;
     if (options) {
-        const collectComment = (typeof options.comment === 'boolean' && options.comment);
+        collectComment = (typeof options.comment === 'boolean' && options.comment);
         const attachComment = (typeof options.attachComment === 'boolean' && options.attachComment);
         if (collectComment || attachComment) {
             commentHandler = new CommentHandler();
@@ -50,6 +51,11 @@ export function parse(code, options, delegate) {
         }
     }
 
+    let isModule = false;
+    if (options && typeof options.sourceType === 'string') {
+        isModule = (options.sourceType === 'module');
+    }
+
     let parser: Parser;
     if (options && typeof options.jsx === 'boolean' && options.jsx) {
         parser = new JSXParser(code, options, parserDelegate);
@@ -57,9 +63,10 @@ export function parse(code, options, delegate) {
         parser = new Parser(code, options, parserDelegate);
     }
 
-    const ast = <any>(parser.parseProgram());
+    const program = isModule ? parser.parseModule() : parser.parseScript();
+    const ast = program as any;
 
-    if (parser.config.comment) {
+    if (collectComment && commentHandler) {
         ast.comments = commentHandler.comments;
     }
     if (parser.config.tokens) {
@@ -70,6 +77,18 @@ export function parse(code, options, delegate) {
     }
 
     return ast;
+}
+
+export function parseModule(code: string, options, delegate) {
+    let parsingOptions = options || {};
+    parsingOptions.sourceType = 'module';
+    return parse(code, parsingOptions, delegate);
+}
+
+export function parseScript(code: string, options, delegate) {
+    let parsingOptions = options || {};
+    parsingOptions.sourceType = 'script';
+    return parse(code, parsingOptions, delegate);
 }
 
 export function tokenize(code: string, options, delegate) {
@@ -103,4 +122,4 @@ export function tokenize(code: string, options, delegate) {
 export { Syntax } from './syntax';
 
 // Sync with *.json manifests.
-export const version = '3.0.0-dev';
+export const version = '4.0.0-dev';

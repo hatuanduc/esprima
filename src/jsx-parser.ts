@@ -1,29 +1,30 @@
-import { Character} from './character';
-import { Token, TokenName } from './token';
-
-import { Parser } from './parser';
-
-import { XHTMLEntities } from './xhtml-entities';
+import { Character } from './character';
+import * as JSXNode from './jsx-nodes';
 import { JSXSyntax } from './jsx-syntax';
 import * as Node from './nodes';
-import * as JSXNode from './jsx-nodes';
-
-interface MetaJSXNode {
-    index: number;
-    line: number;
-    column: number;
-}
+import { Marker, Parser } from './parser';
+import { Token, TokenName } from './token';
+import { XHTMLEntities } from './xhtml-entities';
 
 interface MetaJSXElement {
-    node: MetaJSXNode;
+    node: Marker;
     opening: JSXNode.JSXOpeningElement;
-    closing: JSXNode.JSXClosingElement;
+    closing: JSXNode.JSXClosingElement | null;
     children: JSXNode.JSXChild[];
 }
 
-enum JSXToken {
+const enum JSXToken {
     Identifier = 100,
     Text
+}
+
+interface RawJSXToken {
+    type: Token | JSXToken;
+    value: string;
+    lineNumber: number;
+    lineStart: number;
+    start: number;
+    end: number;
 }
 
 TokenName[JSXToken.Identifier] = 'JSXIdentifier';
@@ -35,18 +36,21 @@ function getQualifiedElementName(elementName: JSXNode.JSXElementName): string {
 
     switch (elementName.type) {
         case JSXSyntax.JSXIdentifier:
-            const id = <JSXNode.JSXIdentifier>(elementName);
+            const id = elementName as JSXNode.JSXIdentifier;
             qualifiedName = id.name;
             break;
         case JSXSyntax.JSXNamespacedName:
-            const ns = <JSXNode.JSXNamespacedName>(elementName);
+            const ns = elementName as JSXNode.JSXNamespacedName;
             qualifiedName = getQualifiedElementName(ns.namespace) + ':' +
                 getQualifiedElementName(ns.name);
             break;
         case JSXSyntax.JSXMemberExpression:
-            const expr = <JSXNode.JSXMemberExpression>(elementName);
+            const expr = elementName as JSXNode.JSXMemberExpression;
             qualifiedName = getQualifiedElementName(expr.object) + '.' +
                 getQualifiedElementName(expr.property);
+            break;
+        /* istanbul ignore next */
+        default:
             break;
     }
 
@@ -66,8 +70,8 @@ export class JSXParser extends Parser {
     startJSX() {
         // Unwind the scanner before the lookahead token.
         this.scanner.index = this.startMarker.index;
-        this.scanner.lineNumber = this.startMarker.lineNumber;
-        this.scanner.lineStart = this.startMarker.lineStart;
+        this.scanner.lineNumber = this.startMarker.line;
+        this.scanner.lineStart = this.startMarker.index - this.startMarker.column;
     }
 
     finishJSX() {
@@ -75,7 +79,17 @@ export class JSXParser extends Parser {
         this.nextToken();
     }
 
-    createJSXNode(): MetaJSXNode {
+    reenterJSX() {
+        this.startJSX();
+        this.expectJSX('}');
+
+        // Pop the closing '}' added from the lookahead.
+        if (this.config.tokens) {
+            this.tokens.pop();
+        }
+    }
+
+    createJSXNode(): Marker {
         this.collectComments();
         return {
             index: this.scanner.index,
@@ -84,7 +98,7 @@ export class JSXParser extends Parser {
         };
     }
 
-    createJSXChildNode(): MetaJSXNode {
+    createJSXChildNode(): Marker {
         return {
             index: this.scanner.index,
             line: this.scanner.lineNumber,
@@ -92,27 +106,54 @@ export class JSXParser extends Parser {
         };
     }
 
-    scanXHTMLEntity() {
+    scanXHTMLEntity(quote: string): string {
         let result = '&';
 
-        let str = '';
-        while (!this.scanner.eof()) {
-            const ch = this.scanner.source[this.scanner.index++];
-            if (ch === ';') {
-                if (str[0] === '#') {
-                    str = str.substr(1);
-                    const hex = (str[0] === 'x');
-                    const cp = hex ? parseInt('0' + str, 16) : parseInt(str, 10);
-                    result = String.fromCharCode(cp);
-                } else if (XHTMLEntities[str]) {
-                    result = XHTMLEntities[str];
-                } else {
-                    result += ch;
-                }
+        let valid = true;
+        let terminated = false;
+        let numeric = false;
+        let hex = false;
+
+        while (!this.scanner.eof() && valid && !terminated) {
+            const ch = this.scanner.source[this.scanner.index];
+            if (ch === quote) {
                 break;
             }
-            str += ch;
+            terminated = (ch === ';');
             result += ch;
+            ++this.scanner.index;
+            if (!terminated) {
+                switch (result.length) {
+                    case 2:
+                        // e.g. '&#123;'
+                        numeric = (ch === '#');
+                        break;
+                    case 3:
+                        if (numeric) {
+                            // e.g. '&#x41;'
+                            hex = (ch === 'x');
+                            valid = hex || Character.isDecimalDigit(ch.charCodeAt(0));
+                            numeric = numeric && !hex;
+                        }
+                        break;
+                    default:
+                        valid = valid && !(numeric && !Character.isDecimalDigit(ch.charCodeAt(0)));
+                        valid = valid && !(hex && !Character.isHexDigit(ch.charCodeAt(0)));
+                        break;
+                }
+            }
+        }
+
+        if (valid && terminated && result.length > 2) {
+            // e.g. '&#x41;' becomes just '#x41'
+            const str = result.substr(1, result.length - 2);
+            if (numeric && str.length > 1) {
+                result = String.fromCharCode(parseInt(str.substr(1), 10));
+            } else if (hex && str.length > 2) {
+                result = String.fromCharCode(parseInt('0' + str.substr(1), 16));
+            } else if (!numeric && !hex && XHTMLEntities[str]) {
+                result = XHTMLEntities[str];
+            }
         }
 
         return result;
@@ -120,7 +161,7 @@ export class JSXParser extends Parser {
 
     // Scan the next JSX token. This replaces Scanner#lex when in JSX mode.
 
-    lexJSX(): any {
+    lexJSX(): RawJSXToken {
         const cp = this.scanner.source.charCodeAt(this.scanner.index);
 
         // < > / : = { }
@@ -146,7 +187,7 @@ export class JSXParser extends Parser {
                 if (ch === quote) {
                     break;
                 } else if (ch === '&') {
-                    str += this.scanXHTMLEntity();
+                    str += this.scanXHTMLEntity(quote);
                 } else {
                     str += ch;
                 }
@@ -179,6 +220,19 @@ export class JSXParser extends Parser {
             };
         }
 
+        // `
+        if (cp === 96) {
+            // Only placeholder, since it will be rescanned as a real assignment expression.
+            return {
+                type: Token.Template,
+                value: '',
+                lineNumber: this.scanner.lineNumber,
+                lineStart: this.scanner.lineStart,
+                start: this.scanner.index,
+                end: this.scanner.index
+            };
+        }
+
         // Identifer can not contain backslash (char code 92).
         if (Character.isIdentifierStart(cp) && (cp !== 92)) {
             const start = this.scanner.index;
@@ -205,31 +259,31 @@ export class JSXParser extends Parser {
             };
         }
 
-        this.scanner.throwUnexpectedToken();
+        return this.scanner.throwUnexpectedToken();
     }
 
-    nextJSXToken() {
+    nextJSXToken(): RawJSXToken {
         this.collectComments();
 
         this.startMarker.index = this.scanner.index;
-        this.startMarker.lineNumber = this.scanner.lineNumber;
-        this.startMarker.lineStart = this.scanner.lineStart;
+        this.startMarker.line = this.scanner.lineNumber;
+        this.startMarker.column = this.scanner.index - this.scanner.lineStart;
         const token = this.lexJSX();
         this.lastMarker.index = this.scanner.index;
-        this.lastMarker.lineNumber = this.scanner.lineNumber;
-        this.lastMarker.lineStart = this.scanner.lineStart;
+        this.lastMarker.line = this.scanner.lineNumber;
+        this.lastMarker.column = this.scanner.index - this.scanner.lineStart;
 
         if (this.config.tokens) {
-            this.tokens.push(this.convertToken(token));
+            this.tokens.push(this.convertToken(token as any));
         }
 
         return token;
     }
 
-    nextJSXText() {
+    nextJSXText(): RawJSXToken {
         this.startMarker.index = this.scanner.index;
-        this.startMarker.lineNumber = this.scanner.lineNumber;
-        this.startMarker.lineStart = this.scanner.lineStart;
+        this.startMarker.line = this.scanner.lineNumber;
+        this.startMarker.column = this.scanner.index - this.scanner.lineStart;
 
         const start = this.scanner.index;
 
@@ -251,8 +305,8 @@ export class JSXParser extends Parser {
         }
 
         this.lastMarker.index = this.scanner.index;
-        this.lastMarker.lineNumber = this.scanner.lineNumber;
-        this.lastMarker.lineStart = this.scanner.lineStart;
+        this.lastMarker.line = this.scanner.lineNumber;
+        this.lastMarker.column = this.scanner.index - this.scanner.lineStart;
 
         const token = {
             type: JSXToken.Text,
@@ -264,22 +318,17 @@ export class JSXParser extends Parser {
         };
 
         if ((text.length > 0) && this.config.tokens) {
-            this.tokens.push(this.convertToken(token));
+            this.tokens.push(this.convertToken(token as any));
         }
 
         return token;
     }
 
-    peekJSXToken() {
-        const previousIndex = this.scanner.index;
-        const previousLineNumber = this.scanner.lineNumber;
-        const previousLineStart = this.scanner.lineStart;
-
+    peekJSXToken(): RawJSXToken {
+        const state = this.scanner.saveState();
         this.scanner.scanComments();
         const next = this.lexJSX();
-        this.scanner.index = previousIndex;
-        this.scanner.lineNumber = previousLineNumber;
-        this.scanner.lineStart = previousLineStart;
+        this.scanner.restoreState(state);
 
         return next;
     }
@@ -362,14 +411,14 @@ export class JSXParser extends Parser {
         const node = this.createJSXNode();
 
         this.expectJSX('{');
-        let expression = null;
         this.finishJSX();
+
         if (this.match('}')) {
             this.tolerateError('JSX attributes must only be assigned a non-empty expression');
         }
-        expression = this.parseAssignmentExpression();
-        this.startJSX();
-        this.expectJSX('}');
+
+        const expression = this.parseAssignmentExpression();
+        this.reenterJSX();
 
         return this.finalize(node, new JSXNode.JSXExpressionContainer(expression));
     }
@@ -382,7 +431,7 @@ export class JSXParser extends Parser {
     parseJSXNameValueAttribute(): JSXNode.JSXAttribute {
         const node = this.createJSXNode();
         const name = this.parseJSXAttributeName();
-        let value = null;
+        let value: JSXNode.JSXAttributeValue | null = null;
         if (this.matchJSX('=')) {
             this.expectJSX('=');
             value = this.parseJSXAttributeValue();
@@ -397,14 +446,13 @@ export class JSXParser extends Parser {
 
         this.finishJSX();
         const argument = this.parseAssignmentExpression();
-        this.startJSX();
+        this.reenterJSX();
 
-        this.expectJSX('}');
         return this.finalize(node, new JSXNode.JSXSpreadAttribute(argument));
     }
 
     parseJSXAttributes(): JSXNode.JSXElementAttribute[] {
-        const attributes = [];
+        const attributes: JSXNode.JSXElementAttribute[] = [];
 
         while (!this.matchJSX('/') && !this.matchJSX('>')) {
             const attribute = this.matchJSX('{') ? this.parseJSXSpreadAttribute() :
@@ -456,35 +504,30 @@ export class JSXParser extends Parser {
         const node = this.createJSXChildNode();
         this.collectComments();
         this.lastMarker.index = this.scanner.index;
-        this.lastMarker.lineNumber = this.scanner.lineNumber;
-        this.lastMarker.lineStart = this.scanner.lineStart;
+        this.lastMarker.line = this.scanner.lineNumber;
+        this.lastMarker.column = this.scanner.index - this.scanner.lineStart;
         return this.finalize(node, new JSXNode.JSXEmptyExpression());
-    }
-
-    parseJSXExpression(): Node.Expression | JSXNode.JSXEmptyExpression {
-        let expression;
-
-        if (this.matchJSX('}')) {
-            expression = this.parseJSXEmptyExpression();
-        } else {
-            this.finishJSX();
-            expression = this.parseAssignmentExpression();
-            this.startJSX();
-        }
-
-        return expression;
     }
 
     parseJSXExpressionContainer(): JSXNode.JSXExpressionContainer {
         const node = this.createJSXNode();
         this.expectJSX('{');
-        const expression = this.parseJSXExpression();
-        this.expectJSX('}');
+
+        let expression: Node.Expression | JSXNode.JSXEmptyExpression;
+        if (this.matchJSX('}')) {
+            expression = this.parseJSXEmptyExpression();
+            this.expectJSX('}');
+        } else {
+            this.finishJSX();
+            expression = this.parseAssignmentExpression();
+            this.reenterJSX();
+        }
+
         return this.finalize(node, new JSXNode.JSXExpressionContainer(expression));
     }
 
     parseJSXChildren(): JSXNode.JSXChild[] {
-        const children = [];
+        const children: JSXNode.JSXChild[] = [];
 
         while (!this.scanner.eof()) {
             const node = this.createJSXChildNode();
@@ -513,7 +556,7 @@ export class JSXParser extends Parser {
             const node = this.createJSXChildNode();
             const element = this.parseJSXBoundaryElement();
             if (element.type === JSXSyntax.JSXOpeningElement) {
-                const opening = <JSXNode.JSXOpeningElement>(element);
+                const opening = element as JSXNode.JSXOpeningElement;
                 if (opening.selfClosing) {
                     const child = this.finalize(node, new JSXNode.JSXElement(opening, [], null));
                     el.children.push(child);
@@ -523,7 +566,7 @@ export class JSXParser extends Parser {
                 }
             }
             if (element.type === JSXSyntax.JSXClosingElement) {
-                el.closing = <JSXNode.JSXClosingElement>(element);
+                el.closing = element as JSXNode.JSXClosingElement;
                 const open = getQualifiedElementName(el.opening.name);
                 const close = getQualifiedElementName(el.closing.name);
                 if (open !== close) {
@@ -531,8 +574,9 @@ export class JSXParser extends Parser {
                 }
                 if (stack.length > 0) {
                     const child = this.finalize(el.node, new JSXNode.JSXElement(el.opening, el.children, el.closing));
-                    el = stack.pop();
+                    el = stack[stack.length - 1];
                     el.children.push(child);
+                    stack.pop();
                 } else {
                     break;
                 }
@@ -546,8 +590,8 @@ export class JSXParser extends Parser {
         const node = this.createJSXNode();
 
         const opening = this.parseJSXOpeningElement();
-        let children = [];
-        let closing = null;
+        let children: JSXNode.JSXChild[] = [];
+        let closing: JSXNode.JSXClosingElement | null = null;
 
         if (!opening.selfClosing) {
             const el = this.parseComplexJSXElement({ node, opening, closing, children });

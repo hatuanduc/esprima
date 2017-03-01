@@ -1,5 +1,5 @@
 /*
-  Copyright (c) jQuery Foundation, Inc. and Contributors, All Rights Reserved.
+  Copyright JS Foundation and other contributors, https://js.foundation/
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
@@ -142,7 +142,8 @@
             tree = esprima.parse(code, { jsx: options.jsx, tolerant: options.tolerant, sourceType: options.sourceType, range: true });
             tree = esprima.parse(code, { jsx: options.jsx, tolerant: options.tolerant, sourceType: options.sourceType, loc: true });
 
-            tree = esprima.parse(code, options);
+            tree = (options.sourceType === 'script') ? esprima.parseScript(code, options) : esprima.parseModule(code, options);
+            esprima.parse(code, options);
 
             if (options.tolerant) {
                 for (i = 0, len = tree.errors.length; i < len; i += 1) {
@@ -221,6 +222,7 @@
         // Exercise more code paths with the delegate
         try {
             esprima.parse(code);
+            (options.sourceType === 'module') ? esprima.parseModule(code) : esprima.parseScript(code);
             esprima.parse(code, { range: false, loc: false, comment: false }, filter);
             esprima.parse(code, { range: true,  loc: false, comment: false }, filter);
             esprima.parse(code, { range: false, loc: true,  comment: false }, filter);
@@ -307,60 +309,17 @@
         }
     }
 
-    function testModule(code, exception) {
+    function testError(testCase) {
         'use strict';
-        var i, options, expected, actual, err, handleInvalidRegexFlag;
+        var sourceType, i, options, exception, expected, code, actual, err, handleInvalidRegexFlag, tokenize;
 
         // Different parsing options should give the same error.
+        sourceType = testCase.key.match(/\.module$/) ? 'module' : 'script';
         options = [
-            { sourceType: 'module' },
-            { sourceType: 'module', comment: true },
-            { sourceType: 'module', raw: true },
-            { sourceType: 'module', raw: true, comment: true }
-        ];
-
-        if (!exception.message) {
-            exception.message = 'Error: Line 1: ' + exception.description;
-        }
-        exception.description = exception.message.replace(/Error: Line [0-9]+: /, '');
-
-        expected = JSON.stringify(exception);
-
-        for (i = 0; i < options.length; i += 1) {
-
-            try {
-                esprima.parse(code, options[i]);
-            } catch (e) {
-                err = errorToObject(e);
-                err.description = e.description;
-                actual = JSON.stringify(err);
-            }
-
-            if (expected !== actual) {
-
-                // Compensate for old V8 which does not handle invalid flag.
-                if (exception.message.indexOf('Invalid regular expression') > 0) {
-                    if (typeof actual === 'undefined' && !handleInvalidRegexFlag) {
-                        return;
-                    }
-                }
-
-                throw new NotMatchingError(expected, actual);
-            }
-
-        }
-    }
-
-    function testError(code, exception) {
-        'use strict';
-        var i, options, expected, actual, err, handleInvalidRegexFlag, tokenize;
-
-        // Different parsing options should give the same error.
-        options = [
-            { jsx: true },
-            { jsx: true, comment: true },
-            { jsx: true, raw: true },
-            { jsx: true, raw: true, comment: true }
+            { jsx: true, sourceType: sourceType },
+            { jsx: true, comment: true, sourceType: sourceType },
+            { jsx: true, raw: true, sourceType: sourceType },
+            { jsx: true, raw: true, comment: true, sourceType: sourceType }
         ];
 
         // If handleInvalidRegexFlag is true, an invalid flag in a regular expression
@@ -373,6 +332,7 @@
             handleInvalidRegexFlag = true;
         }
 
+        exception = testCase.failure;
         exception.description = exception.message.replace(/Error: Line [0-9]+: /, '');
 
         if (exception.tokenize) {
@@ -381,6 +341,8 @@
         }
 
         expected = JSON.stringify(exception);
+
+        code = testCase.case || testCase.source || '';
 
         for (i = 0; i < options.length; i += 1) {
 
@@ -413,14 +375,12 @@
 
     return function (testCase) {
         var code = testCase.case || testCase.source || "";
-        if (testCase.hasOwnProperty('module')) {
-            testModule(testCase.case, testCase.module);
-        } else if (testCase.hasOwnProperty('tree')) {
+        if (testCase.hasOwnProperty('tree')) {
             testParse(code, testCase.tree);
         } else if (testCase.hasOwnProperty('tokens')) {
             testTokenize(testCase.case, testCase.tokens);
         } else if (testCase.hasOwnProperty('failure')) {
-            testError(code, testCase.failure);
+            testError(testCase);
         }
     }
 }));

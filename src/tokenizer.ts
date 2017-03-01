@@ -1,29 +1,42 @@
-import { Comment, Scanner } from './scanner';
 import { ErrorHandler } from './error-handler';
+import { Comment, RawToken, Scanner, SourceLocation } from './scanner';
 import { Token, TokenName } from './token';
 
+type ReaderEntry = string | null;
+
+interface BufferEntry {
+    type: string;
+    value: string;
+    regex?: {
+        pattern: string;
+        flags: string;
+    };
+    range?: [number, number];
+    loc?: SourceLocation;
+}
+
 class Reader {
-    values: string[];
+    readonly values: ReaderEntry[];
     curly: number;
     paren: number;
 
     constructor() {
         this.values = [];
         this.curly = this.paren = -1;
-    };
+    }
 
     // A function following one of those tokens is an expression.
     beforeFunctionExpression(t: string): boolean {
         return ['(', '{', '[', 'in', 'typeof', 'instanceof', 'new',
             'return', 'case', 'delete', 'throw', 'void',
             // assignment operators
-            '=', '+=', '-=', '*=', '/=', '%=', '<<=', '>>=', '>>>=',
+            '=', '+=', '-=', '*=', '**=', '/=', '%=', '<<=', '>>=', '>>>=',
             '&=', '|=', '^=', ',',
             // binary/unary operators
-            '+', '-', '*', '/', '%', '++', '--', '<<', '>>', '>>>', '&',
+            '+', '-', '*', '**', '/', '%', '++', '--', '<<', '>>', '>>>', '&',
             '|', '^', '!', '~', '&&', '||', '?', ':', '===', '==', '>=',
             '<=', '<', '>', '!=', '!=='].indexOf(t) >= 0;
-    };
+    }
 
     // Determine if forward slash (/) is an operator or part of a regular expression
     // https://github.com/mozilla/sweet.js/wiki/design
@@ -55,10 +68,13 @@ class Reader {
                     const check = this.values[this.curly - 5];
                     regex = check ? !this.beforeFunctionExpression(check) : true;
                 }
+                break;
+            default:
+                break;
         }
 
         return regex;
-    };
+    }
 
     push(token): void {
         if (token.type === Token.Punctuator || token.type === Token.Keyword) {
@@ -71,19 +87,28 @@ class Reader {
         } else {
             this.values.push(null);
         }
-    };
+    }
 
 }
 
-export class Tokenizer {
-    errorHandler: ErrorHandler;
-    scanner: Scanner;
-    trackRange: boolean;
-    trackLoc: boolean;
-    buffer: any[];
-    reader: Reader;
+/* tslint:disable:max-classes-per-file */
 
-    constructor(code: string, config: any) {
+interface Config {
+    tolerant?: boolean;
+    comment?: boolean;
+    range?: boolean;
+    loc?: boolean;
+}
+
+export class Tokenizer {
+    readonly errorHandler: ErrorHandler;
+    scanner: Scanner;
+    readonly trackRange: boolean;
+    readonly trackLoc: boolean;
+    readonly buffer: BufferEntry[];
+    readonly reader: Reader;
+
+    constructor(code: string, config: Config) {
         this.errorHandler = new ErrorHandler();
         this.errorHandler.tolerant = config ? (typeof config.tolerant === 'boolean' && config.tolerant) : false;
 
@@ -94,11 +119,11 @@ export class Tokenizer {
         this.trackLoc = config ? (typeof config.loc === 'boolean' && config.loc) : false;
         this.buffer = [];
         this.reader = new Reader();
-    };
+    }
 
     errors() {
         return this.errorHandler.errors;
-    };
+    }
 
     getNextToken() {
         if (this.buffer.length === 0) {
@@ -107,9 +132,8 @@ export class Tokenizer {
             if (this.scanner.trackComment) {
                 for (let i = 0; i < comments.length; ++i) {
                     const e: Comment = comments[i];
-                    let comment;
                     let value = this.scanner.source.slice(e.slice[0], e.slice[1]);
-                    comment = {
+                    let comment: BufferEntry = {
                         type: e.multiLine ? 'BlockComment' : 'LineComment',
                         value: value
                     };
@@ -136,7 +160,7 @@ export class Tokenizer {
                     };
                 }
 
-                let token;
+                let token: RawToken;
                 if (this.scanner.source[this.scanner.index] === '/') {
                     token = this.reader.isRegexStart() ? this.scanner.scanRegExp() : this.scanner.scanPunctuator();
                 } else {
@@ -144,8 +168,7 @@ export class Tokenizer {
                 }
                 this.reader.push(token);
 
-                let entry;
-                entry = {
+                let entry: BufferEntry = {
                     type: TokenName[token.type],
                     value: this.scanner.source.slice(token.start, token.end)
                 };
@@ -159,8 +182,10 @@ export class Tokenizer {
                     };
                     entry.loc = loc;
                 }
-                if (token.regex) {
-                    entry.regex = token.regex;
+                if (token.type === Token.RegularExpression) {
+                    const pattern = token.pattern as string;
+                    const flags = token.flags as string;
+                    entry.regex = { pattern, flags };
                 }
 
                 this.buffer.push(entry);
@@ -168,6 +193,6 @@ export class Tokenizer {
         }
 
         return this.buffer.shift();
-    };
+    }
 
 }

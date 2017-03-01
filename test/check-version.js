@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /*
-  Copyright (c) jQuery Foundation, Inc. and Contributors, All Rights Reserved.
+  Copyright JS Foundation and other contributors, https://js.foundation/
 
   Redistribution and use in source and binary forms, with or without
   modification, are permitted provided that the following conditions are met:
@@ -76,7 +76,6 @@ function checkVersion() {
     console.log('Library version is', version);
 
     ensureVersion('package.json', version);
-    ensureVersion('bower.json', version);
 }
 
 
